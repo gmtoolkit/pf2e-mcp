@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pf2e-mcp
+  namespace: ttrpg
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pf2e-mcp
+  template:
+    metadata:
+      labels:
+        app: pf2e-mcp
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: "pf2e-mcp"
+        vault.hashicorp.com/agent-inject-secret-voyage: "secret/data/voyage"
+        vault.hashicorp.com/agent-inject-template-voyage: |
+          {{- with secret "secret/data/voyage" -}}
+          export VOYAGE_API_KEY="{{ index .Data.data "api-key" }}"
+          {{- end }}
+        vault.hashicorp.com/agent-inject-secret-qdrant: "secret/data/qdrant"
+        vault.hashicorp.com/agent-inject-template-qdrant: |
+          {{- with secret "secret/data/qdrant" -}}
+          export QDRANT_API_KEY="{{ index .Data.data "cloud-api-key" }}"
+          {{- end }}
+        vault.hashicorp.com/agent-pre-populate-only: "true"
+    spec:
+      serviceAccountName: pf2e-mcp
+      imagePullSecrets:
+        - name: harbor-creds
+      containers:
+        - name: server
+          image: 192.168.1.10:30002/library/pf2e-mcp:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              . /vault/secrets/voyage && . /vault/secrets/qdrant && exec python server.py
+          ports:
+            - containerPort: 8000
+          env:
+            - name: QDRANT_URL
+              value: "https://d4e3a099-2b51-4f69-9c13-b1e2260ac493.us-east-2-0.aws.cloud.qdrant.io"
+            - name: QDRANT_COLLECTION
+              value: "pf2e"
+            - name: VOYAGE_MODEL
+              value: "voyage-3"
+            - name: PORT
+              value: "8000"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pf2e-mcp
+  namespace: ttrpg
+spec:
+  type: NodePort
+  selector:
+    app: pf2e-mcp
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30081
