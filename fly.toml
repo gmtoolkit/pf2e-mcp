@@ -3,7 +3,6 @@ primary_region = "iad"
 
 [build]
   dockerfile = "Dockerfile"
-  build_context = "server"
 
 [env]
   PORT              = "8080"
