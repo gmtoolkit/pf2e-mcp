@@ -95,7 +95,7 @@ _db_pool: Optional[asyncpg.Pool] = None
 async def _get_db() -> Optional[asyncpg.Pool]:
     global _db_pool
     if _db_pool is None and DATABASE_URL:
-        _db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3)
+        _db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3, ssl=False)
     return _db_pool
 
 async def _check_rate_limit(user_id: str) -> bool:
