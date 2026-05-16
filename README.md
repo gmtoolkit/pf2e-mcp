@@ -58,4 +58,8 @@ If this saves you time at the table, consider buying me a coffee:
 
 ---
 
-Rules content © respective publishers (Paizo, MCDM). This project is not affiliated with or endorsed by any publisher.
+## Legal
+
+TTRPG MCP is an independent product published under the DRAW STEEL Creator License and is not affiliated with MCDM Productions, LLC. DRAW STEEL © 2024 MCDM Productions, LLC.
+
+Pathfinder and Starfinder are trademarks of Paizo Inc. Content used under the [ORC License](https://paizo.com/licenses/orc).
