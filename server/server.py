@@ -11,13 +11,15 @@ Env vars:
   DS_COLLECTION        - Draw Steel collection (default: draw-steel)
   VOYAGE_MODEL         - (default: voyage-3)
   PORT                 - HTTP port (default: 8000)
-  DATABASE_URL         - Postgres URL for rate limiting
+  DATABASE_URL         - Postgres URL for rate limiting + call logging
   AUTH_ISSUER          - JWT issuer (default: https://gmkit.io)
   RATE_LIMIT_PER_DAY   - Max calls per user per day (default: 100)
 """
 import asyncio
 import os
 import time
+from contextvars import ContextVar
+from functools import wraps
 from typing import Optional
 
 import asyncpg
@@ -50,7 +52,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 # --- JWKS cache ---
 _jwks_cache: dict = {}
 _jwks_fetched_at: float = 0.0
-_JWKS_TTL = 3600  # re-fetch public keys every hour
+_JWKS_TTL = 3600
 
 async def _get_public_keys() -> dict:
     global _jwks_cache, _jwks_fetched_at
@@ -73,7 +75,6 @@ async def _validate_token(token: str) -> Optional[dict]:
         kid = header.get("kid")
         keys = await _get_public_keys()
         if kid not in keys:
-            # force refresh once on unknown kid
             _jwks_fetched_at = 0
             keys = await _get_public_keys()
         public_key = keys.get(kid)
@@ -89,20 +90,20 @@ async def _validate_token(token: str) -> Optional[dict]:
     except Exception:
         return None
 
-# --- Rate limiting ---
+# --- DB pool ---
 _db_pool: Optional[asyncpg.Pool] = None
 
 async def _get_db() -> Optional[asyncpg.Pool]:
     global _db_pool
     if _db_pool is None and DATABASE_URL:
-        _db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=3, ssl=False)
+        _db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=5, ssl=False)
     return _db_pool
 
+# --- Rate limiting ---
 async def _check_rate_limit(user_id: str) -> bool:
-    """Returns True if allowed, False if limit exceeded. Increments on allow."""
     pool = await _get_db()
     if pool is None:
-        return True  # no DB configured — allow
+        return True
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO rate_limits(user_id, date, call_count)
@@ -113,6 +114,43 @@ async def _check_rate_limit(user_id: str) -> bool:
             user_id,
         )
         return row["call_count"] <= RATE_LIMIT
+
+# --- Tool call logging ---
+_current_user: ContextVar[Optional[dict]] = ContextVar("current_user", default=None)
+
+def _est_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+async def _log_tool_call(user_id: str, tool_name: str, tokens_in: int, tokens_out: int, latency_ms: int) -> None:
+    if not user_id:
+        return
+    pool = await _get_db()
+    if pool is None:
+        return
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO tool_calls(user_id, tool_name, tokens_in, tokens_out, latency_ms)
+                   VALUES($1, $2, $3, $4, $5)""",
+                user_id, tool_name, tokens_in, tokens_out, latency_ms,
+            )
+    except Exception:
+        pass
+
+def tracked_tool(fn):
+    """Wraps a sync MCP tool: runs in thread, logs call + estimated token counts."""
+    @wraps(fn)
+    async def _wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        user = _current_user.get()
+        user_id = user.get("sub", "") if user else ""
+        tokens_in = _est_tokens(" ".join(str(v) for v in list(args) + list(kwargs.values())))
+        result = await asyncio.to_thread(fn, *args, **kwargs)
+        latency = int((time.perf_counter() - start) * 1000)
+        tokens_out = _est_tokens(result if isinstance(result, str) else str(result))
+        asyncio.create_task(_log_tool_call(user_id, fn.__name__, tokens_in, tokens_out, latency))
+        return result
+    return mcp.tool()(_wrapper)
 
 # --- Auth middleware ---
 SKIP_PATHS = {"/health", "/.well-known/oauth-authorization-server"}
@@ -132,7 +170,12 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         if not await _check_rate_limit(user_id):
             return JSONResponse({"error": "rate_limit_exceeded", "detail": f"limit is {RATE_LIMIT}/day"}, status_code=429)
         request.state.user = payload
-        return await call_next(request)
+        token = _current_user.set(payload)
+        try:
+            response = await call_next(request)
+        finally:
+            _current_user.reset(token)
+        return response
 
 mcp = FastMCP(
     "ttrpg",
@@ -148,7 +191,7 @@ mcp = FastMCP(
 )
 
 
-@mcp.tool()
+@tracked_tool
 def search_pf2e(query: str, limit: int = 5, category: str = "") -> str:
     """
     Semantic search over all PF2e content from Archives of Nethys.
@@ -200,7 +243,7 @@ def search_pf2e(query: str, limit: int = 5, category: str = "") -> str:
     return "\n\n".join(parts)
 
 
-@mcp.tool()
+@tracked_tool
 def get_pf2e_entry(name: str, category: str = "") -> str:
     """
     Retrieve all chunks for a specific PF2e entry by name.
@@ -209,7 +252,6 @@ def get_pf2e_entry(name: str, category: str = "") -> str:
         name:     Exact or partial name, e.g. "Fireball" or "Power Attack"
         category: Optional category filter to narrow results
     """
-    # Search by name using semantic query — name match tends to score very high
     query = f"{category} {name}".strip()
     result = voyage.embed([query], model=VOYAGE_MODEL, input_type="query")
     vector = result.embeddings[0]
@@ -228,7 +270,6 @@ def get_pf2e_entry(name: str, category: str = "") -> str:
         with_payload=True,
     )
 
-    # Filter to hits where name roughly matches
     name_lower = name.lower().replace(" ", "_")
     matched = [
         h for h in hits
@@ -239,7 +280,6 @@ def get_pf2e_entry(name: str, category: str = "") -> str:
     if not matched:
         return f"No entry found for '{name}'."
 
-    # Sort by chunk_index to reassemble order
     matched.sort(key=lambda h: h.payload.get("chunk_index", 0))
 
     entry_name = matched[0].payload.get("name", name).replace("_", " ")
@@ -260,10 +300,9 @@ def get_pf2e_entry(name: str, category: str = "") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tracked_tool
 def list_pf2e_categories() -> str:
     """List all available PF2e content categories in the database."""
-    # Scroll a sample and collect unique categories
     cats: dict[str, int] = {}
     offset = None
     while True:
@@ -286,7 +325,7 @@ def list_pf2e_categories() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tracked_tool
 def search_sf2e(query: str, limit: int = 5, category: str = "") -> str:
     """
     Semantic search over all Starfinder 2e content from Archives of Nethys (2e.aonsrd.com).
@@ -338,7 +377,7 @@ def search_sf2e(query: str, limit: int = 5, category: str = "") -> str:
     return "\n\n".join(parts)
 
 
-@mcp.tool()
+@tracked_tool
 def get_sf2e_entry(name: str, category: str = "") -> str:
     """
     Retrieve all chunks for a specific Starfinder 2e entry by name.
@@ -395,7 +434,7 @@ def get_sf2e_entry(name: str, category: str = "") -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tracked_tool
 def list_sf2e_categories() -> str:
     """List all available Starfinder 2e content categories in the database."""
     cats: dict[str, int] = {}
@@ -420,7 +459,7 @@ def list_sf2e_categories() -> str:
     return "\n".join(lines)
 
 
-@mcp.tool()
+@tracked_tool
 def search_draw_steel(query: str, limit: int = 5, category: str = "") -> str:
     """
     Semantic search over Draw Steel (MCDM) rules, abilities, monsters, and more.
@@ -470,7 +509,7 @@ def search_draw_steel(query: str, limit: int = 5, category: str = "") -> str:
     return "\n\n".join(parts)
 
 
-@mcp.tool()
+@tracked_tool
 def get_draw_steel_entry(name: str, category: str = "") -> str:
     """
     Retrieve all chunks for a specific Draw Steel entry by name.
