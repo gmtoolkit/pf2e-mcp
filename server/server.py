@@ -40,6 +40,9 @@ QDRANT_API_KEY    = os.environ.get("QDRANT_API_KEY", "")
 QDRANT_COLLECTION = os.environ.get("QDRANT_COLLECTION", "pf2e")
 SF2E_COLLECTION   = os.environ.get("SF2E_COLLECTION", "sf2e")
 DS_COLLECTION     = os.environ.get("DS_COLLECTION", "draw-steel")
+DND5E_COLLECTION  = os.environ.get("DND5E_COLLECTION", "dnd5e")
+DND2024_COLLECTION = os.environ.get("DND2024_COLLECTION", "dnd2024")
+DH_COLLECTION     = os.environ.get("DH_COLLECTION", "daggerheart")
 DATABASE_URL      = os.environ.get("DATABASE_URL", "")
 AUTH_ISSUER       = os.environ.get("AUTH_ISSUER", "https://gmkit.io")
 RATE_LIMIT        = int(os.environ.get("RATE_LIMIT_PER_DAY", "100"))
@@ -184,6 +187,9 @@ mcp = FastMCP(
         "For Pathfinder 2e: use search_pf2e or get_pf2e_entry. "
         "For Starfinder 2e: use search_sf2e or get_sf2e_entry. "
         "For Draw Steel (MCDM): use search_draw_steel or get_draw_steel_entry. "
+        "For D&D 5e (2014 SRD): use search_dnd5e or get_dnd5e_entry. "
+        "For D&D 2024 (5.5e SRD): use search_dnd2024 or get_dnd2024_entry. "
+        "For Daggerheart (Darrington Press): use search_daggerheart or get_daggerheart_entry. "
         "Use the game-specific tool matching the user's question."
     ),
     host="0.0.0.0",
@@ -564,6 +570,135 @@ def get_draw_steel_entry(name: str, category: str = "") -> str:
         lines.append(f"_{len(matched)} chunk(s) found — text not in index._")
 
     return "\n".join(lines)
+
+
+def _search_collection(collection: str, query: str, limit: int, category: str) -> str:
+    limit = max(1, min(20, limit))
+    result = voyage.embed([query], model=VOYAGE_MODEL, input_type="query")
+    vector = result.embeddings[0]
+    search_filter = None
+    if category:
+        search_filter = Filter(must=[FieldCondition(key="category", match=MatchValue(value=category))])
+    hits = qdrant.search(collection_name=collection, query_vector=vector,
+                         query_filter=search_filter, limit=limit, with_payload=True)
+    if not hits:
+        return "No results found."
+    parts = []
+    for i, hit in enumerate(hits, 1):
+        p = hit.payload
+        name  = p.get("name", "Unknown").replace("_", " ")
+        cat   = p.get("category", "")
+        score = f"{hit.score:.3f}"
+        chunk = p.get("chunk_index", 0)
+        text  = p.get("text", "")
+        header = f"### {i}. {name} ({cat}) — score {score}" + (f" [chunk {chunk}]" if chunk > 0 else "")
+        parts.append(f"{header}\n\n{text}" if text else header)
+    return "\n\n".join(parts)
+
+
+def _get_entry_collection(collection: str, name: str, category: str) -> str:
+    query = f"{category} {name}".strip()
+    result = voyage.embed([query], model=VOYAGE_MODEL, input_type="query")
+    vector = result.embeddings[0]
+    search_filter = None
+    if category:
+        search_filter = Filter(must=[FieldCondition(key="category", match=MatchValue(value=category))])
+    hits = qdrant.search(collection_name=collection, query_vector=vector,
+                         query_filter=search_filter, limit=20, with_payload=True)
+    name_lower = name.lower().replace(" ", "_")
+    matched = [h for h in hits if name_lower in h.payload.get("name", "").lower()
+               or name_lower in h.payload.get("s3_key", "").lower()]
+    if not matched:
+        return f"No entry found for '{name}'."
+    matched.sort(key=lambda h: h.payload.get("chunk_index", 0))
+    entry_name = matched[0].payload.get("name", name).replace("_", " ")
+    cat    = matched[0].payload.get("category", "")
+    s3_key = matched[0].payload.get("s3_key", "")
+    lines = [f"# {entry_name}", f"**Category:** {cat}", f"**Source:** {s3_key}", ""]
+    for h in matched:
+        chunk_text = h.payload.get("text", "")
+        if chunk_text:
+            lines.append(chunk_text)
+            lines.append("")
+    return "\n".join(lines)
+
+
+@tracked_tool
+def search_dnd5e(query: str, limit: int = 5, category: str = "") -> str:
+    """
+    Semantic search over D&D 5e SRD (2014) content.
+
+    Args:
+        query:    Natural language query, e.g. "fire damage spells level 3" or "fighter class features"
+        limit:    Number of results to return (1-20, default 5)
+        category: Optional filter — one of: spell, monster, class, subclass, equipment,
+                  magic-item, feat, race, subrace, background, condition, rule (leave empty for all)
+    """
+    return _search_collection(DND5E_COLLECTION, query, limit, category)
+
+
+@tracked_tool
+def get_dnd5e_entry(name: str, category: str = "") -> str:
+    """
+    Retrieve a specific D&D 5e SRD entry by name.
+
+    Args:
+        name:     Exact or partial name, e.g. "Fireball" or "Fighter"
+        category: Optional category filter
+    """
+    return _get_entry_collection(DND5E_COLLECTION, name, category)
+
+
+@tracked_tool
+def search_dnd2024(query: str, limit: int = 5, category: str = "") -> str:
+    """
+    Semantic search over D&D 2024 SRD (5.5e) content.
+
+    Args:
+        query:    Natural language query, e.g. "bardic inspiration mechanics" or "weapon mastery"
+        limit:    Number of results to return (1-20, default 5)
+        category: Optional filter — one of: spell, monster, class, equipment, magic-item,
+                  feat, race, background, condition, rule (leave empty for all)
+    """
+    return _search_collection(DND2024_COLLECTION, query, limit, category)
+
+
+@tracked_tool
+def get_dnd2024_entry(name: str, category: str = "") -> str:
+    """
+    Retrieve a specific D&D 2024 SRD entry by name.
+
+    Args:
+        name:     Exact or partial name, e.g. "Fireball" or "Paladin"
+        category: Optional category filter
+    """
+    return _get_entry_collection(DND2024_COLLECTION, name, category)
+
+
+@tracked_tool
+def search_daggerheart(query: str, limit: int = 5, category: str = "") -> str:
+    """
+    Semantic search over Daggerheart (Darrington Press) rules and content.
+
+    Args:
+        query:    Natural language query, e.g. "bard class abilities" or "adversary types"
+        limit:    Number of results to return (1-20, default 5)
+        category: Optional filter — one of: class, ancestry, community, domain, ability,
+                  environment, adversary, item, rule (leave empty for all)
+    """
+    return _search_collection(DH_COLLECTION, query, limit, category)
+
+
+@tracked_tool
+def get_daggerheart_entry(name: str, category: str = "") -> str:
+    """
+    Retrieve a specific Daggerheart entry by name.
+
+    Args:
+        name:     Exact or partial name, e.g. "Bard" or "Seraph"
+        category: Optional category filter
+    """
+    return _get_entry_collection(DH_COLLECTION, name, category)
 
 
 @mcp.custom_route("/health", methods=["GET"])
