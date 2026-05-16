@@ -1,4 +1,4 @@
-app = "pf2e-mcp"
+app = "ttrpg-mcp"
 primary_region = "iad"
 
 [build]
@@ -8,31 +8,18 @@ primary_region = "iad"
   PORT              = "8080"
   QDRANT_URL        = "https://d4e3a099-2b51-4f69-9c13-b1e2260ac493.us-east-2-0.aws.cloud.qdrant.io"
   QDRANT_COLLECTION = "pf2e"
+  SF2E_COLLECTION   = "sf2e"
+  DS_COLLECTION     = "draw-steel"
   VOYAGE_MODEL      = "voyage-3"
 
-[[services]]
-  internal_port = 8080
-  protocol      = "tcp"
-
-  [[services.ports]]
-    port     = 443
-    handlers = ["tls", "http"]
-
-  [[services.ports]]
-    port     = 80
-    handlers = ["http"]
-
-  [[services.http_checks]]
-    interval = 30000
-    timeout  = 5000
-    path     = "/health"
 
 [http_service]
   internal_port       = 8080
   force_https         = true
-  auto_stop_machines  = false
-  auto_start_machines = true
+  auto_stop_machines   = false
+  auto_start_machines  = false
   min_machines_running = 1
+  max_machines_running = 1
 
 [[vm]]
   memory = "256mb"

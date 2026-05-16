@@ -1,15 +1,18 @@
 # TTRPG MCP
 
-Semantic search over **Pathfinder 2e**, **Starfinder 2e**, and **Draw Steel** rules — served as an [MCP](https://modelcontextprotocol.io) server for Claude.
+Semantic search over **Pathfinder 2e**, **Starfinder 2e**, **Draw Steel**, **D&D 5e (2014 SRD)**, **D&D 2024 (5.5e SRD)**, and **Daggerheart** rules — served as an [MCP](https://modelcontextprotocol.io) server for Claude.
 
 ## What it does
 
-Ask rules questions in plain English inside Claude and get accurate, cited answers sourced from Archives of Nethys (PF2e, SF2e) and the Draw Steel rules.
+Ask rules questions in plain English inside Claude and get accurate, cited answers sourced from the official SRDs and rule references for each game.
 
 **Tools provided:**
-- `search_pf2e` / `get_pf2e_entry` — Pathfinder 2e content
-- `search_sf2e` / `get_sf2e_entry` — Starfinder 2e content
-- `search_draw_steel` / `get_draw_steel_entry` — Draw Steel (MCDM) content
+- `search_pf2e` / `get_pf2e_entry` — Pathfinder 2e (full Archives of Nethys)
+- `search_sf2e` / `get_sf2e_entry` — Starfinder 2e (full Archives of Nethys)
+- `search_draw_steel` / `get_draw_steel_entry` — Draw Steel (MCDM)
+- `search_dnd5e` / `get_dnd5e_entry` — D&D 5e SRD (2014)
+- `search_dnd2024` / `get_dnd2024_entry` — D&D 2024 SRD (5.5e)
+- `search_daggerheart` / `get_daggerheart_entry` — Daggerheart (Darrington Press)
 
 ## Usage
 
@@ -36,8 +39,10 @@ Add this to `~/.claude/mcp.json`. Claude Code will open a browser to authenticat
 
 ```
 "What does the Paladin's Retributive Strike do in PF2e?"
-"Compare champion and censor across PF2e, SF2e, Draw Steel"
-"What armor can a Kineticist wear?"
+"Compare champion and fighter across PF2e, D&D 5e, D&D 2024, and Draw Steel"
+"What are the Fury's rage abilities in Draw Steel?"
+"List all Daggerheart classes and their core mechanics"
+"What spells does a Wizard get in D&D 2024?"
 ```
 
 ## Stack
@@ -63,3 +68,7 @@ If this saves you time at the table, consider buying me a coffee:
 TTRPG MCP is an independent product published under the DRAW STEEL Creator License and is not affiliated with MCDM Productions, LLC. DRAW STEEL © 2024 MCDM Productions, LLC.
 
 Pathfinder and Starfinder are trademarks of Paizo Inc. Content used under the [ORC License](https://paizo.com/licenses/orc).
+
+D&D 5e and D&D 2024 SRD content used under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Dungeons & Dragons is a trademark of Wizards of the Coast LLC.
+
+Daggerheart content used under the [Darrington Press Community License](https://darringtonpress.com/dpcl/).
